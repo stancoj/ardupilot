@@ -4,12 +4,14 @@
  *      Author: Eugene Shamaev
  */
 
+#define ALLOW_DOUBLE_MATH_FUNCTIONS
+
 #include <AP_Common/AP_Common.h>
 #include <AP_HAL/AP_HAL.h>
+#include "AP_UAVCAN.h"
 
 #if HAL_WITH_UAVCAN
 
-#include "AP_UAVCAN.h"
 #include <GCS_MAVLink/GCS.h>
 
 #include <AP_BoardConfig/AP_BoardConfig.h>
@@ -35,7 +37,25 @@
 
 #include <uavcan/equipment/power/BatteryInfo.hpp>
 
+#include <uavcan/aerobtec/AerobtecMsg.hpp>
+#include <uavcan/aerobtec/ESC_status.hpp>
+#include <uavcan/aerobtec/PWM.hpp>
+#include <uavcan/aerobtec/Vs.hpp>
+#include <uavcan/aerobtec/Is.hpp>
+#include <uavcan/aerobtec/Vbus.hpp>
+#include <uavcan/aerobtec/Speed.hpp>
+#include <uavcan/aerobtec/Temp.hpp>
+
+
 extern const AP_HAL::HAL& hal;
+AP_UAVCAN::Aerobtec_message *ae_rx_msg;
+AP_UAVCAN::AE_pwm			*ae_rx_pwm;
+AP_UAVCAN::AE_esc_status	*ae_rx_esc;
+AP_UAVCAN::AE_speed			*ae_rx_speed;
+AP_UAVCAN::AE_V_bus			*ae_rx_vbus;
+AP_UAVCAN::AE_I_s			*ae_rx_is;
+AP_UAVCAN::AE_V_s			*ae_rx_vs;
+AP_UAVCAN::AE_temp			*ae_rx_temp;
 
 #define debug_uavcan(level, fmt, args...) do { if ((level) <= AP_BoardConfig_CAN::get_can_debug()) { hal.console->printf(fmt, ##args); }} while (0)
 
@@ -183,7 +203,7 @@ static void gnss_fix_cb(const uavcan::ReceivedDataStructure<uavcan::equipment::g
         state->num_sats = 0;
     }
 
-    state->last_gps_time_ms = AP_HAL::millis();
+	state->last_gps_time_ms = AP_HAL::millis();
 
     // after all is filled, update all listeners with new data
     ap_uavcan->update_gps_state(msg.getSrcNodeID().get());
@@ -358,10 +378,286 @@ static void battery_info_st_cb1(const uavcan::ReceivedDataStructure<uavcan::equi
 static void (*battery_info_st_cb_arr[2])(const uavcan::ReceivedDataStructure<uavcan::equipment::power::BatteryInfo>& msg)
         = { battery_info_st_cb0, battery_info_st_cb1 };
 
+/*************************************************************/
+/**********                 AerobTec                **********/
+/*************************************************************/
+static float ae_iq2float(uint32_t number, uint8_t sign, uint8_t Ivalue, uint8_t Qvalue)
+{
+	float q_num = 0;
+
+	if(sign == 1)
+	{
+		number = number & ~(1 << ((Ivalue + Qvalue) - 1));
+		q_num = (float)(((int32_t)(number*-1))/pow(2,Qvalue));
+		return(q_num);
+	}
+	else
+	{
+		q_num = (float)(number/pow(2,Qvalue));
+		return(q_num);
+	}
+}
+
+
+static void aerobtec_data_cb(const uavcan::ReceivedDataStructure<uavcan::aerobtec::AerobtecMsg>& msg, uint8_t mgr)
+{
+    AP_UAVCAN *ap_uavcan = AP_UAVCAN::get_uavcan(mgr);
+    if (ap_uavcan == nullptr) {
+        return;
+    }
+
+    ae_rx_msg = ap_uavcan->find_ae_node();
+    if (ae_rx_msg == nullptr) {
+        return;
+    }
+
+    ae_rx_msg->PWM = msg.PWM;
+    ae_rx_msg->Vbus = msg.Vbus;
+    ae_rx_msg->Vs = msg.Vs;
+    ae_rx_msg->Is = msg.Is;
+    ae_rx_msg->temp = msg.temp;
+    ae_rx_msg->speed = msg.speed;
+    ae_rx_msg->status = msg.status;
+}
+
+static void aerobtec_data_cb0(const uavcan::ReceivedDataStructure<uavcan::aerobtec::AerobtecMsg>& msg)
+{
+	aerobtec_data_cb(msg, 0);
+}
+static void aerobtec_data_cb1(const uavcan::ReceivedDataStructure<uavcan::aerobtec::AerobtecMsg>& msg)
+{
+	aerobtec_data_cb(msg, 1);
+}
+static void (*aerobtec_data_cb_arr[2])(const uavcan::ReceivedDataStructure<uavcan::aerobtec::AerobtecMsg>& msg)
+        = { aerobtec_data_cb0, aerobtec_data_cb1};
+
+
+/*Listener for PWM*/
+static void aerobtec_pwm_cb(const uavcan::ReceivedDataStructure<uavcan::aerobtec::PWM>& msg, uint8_t mgr)
+{
+    AP_UAVCAN *ap_uavcan = AP_UAVCAN::get_uavcan(mgr);
+    if (ap_uavcan == nullptr) {
+        return;
+    }
+
+    ae_rx_pwm = ap_uavcan->find_ae_pwm_node();
+    if (ae_rx_pwm == nullptr) {
+        return;
+    }
+
+    for(uint8_t i = 0; i < 8; i++)
+    {
+		ae_rx_pwm->pwm_value[i] = msg.PWM[i];
+    }
+}
+
+static void aerobtec_pwm_cb0(const uavcan::ReceivedDataStructure<uavcan::aerobtec::PWM>& msg)
+{
+	aerobtec_pwm_cb(msg, 0);
+}
+static void aerobtec_pwm_cb1(const uavcan::ReceivedDataStructure<uavcan::aerobtec::PWM>& msg)
+{
+	aerobtec_pwm_cb(msg, 1);
+}
+static void (*aerobtec_pwm_cb_arr[2])(const uavcan::ReceivedDataStructure<uavcan::aerobtec::PWM>& msg)
+        = { aerobtec_pwm_cb0, aerobtec_pwm_cb1};
+
+
+
+/*Listener for ESC_status*/
+static void aerobtec_esc_status_cb(const uavcan::ReceivedDataStructure<uavcan::aerobtec::ESC_status>& msg, uint8_t mgr)
+{
+    AP_UAVCAN *ap_uavcan = AP_UAVCAN::get_uavcan(mgr);
+    if (ap_uavcan == nullptr) {
+        return;
+    }
+
+    ae_rx_esc = ap_uavcan->find_ae_esc_status_node();
+    if (ae_rx_esc == nullptr) {
+        return;
+    }
+
+    for(uint8_t i = 0; i < 8; i++)
+    {
+		ae_rx_esc->status_value[i] = msg.esc_status[i];
+    }
+}
+
+static void aerobtec_esc_status_cb0(const uavcan::ReceivedDataStructure<uavcan::aerobtec::ESC_status>& msg)
+{
+	aerobtec_esc_status_cb(msg, 0);
+}
+static void aerobtec_esc_status_cb1(const uavcan::ReceivedDataStructure<uavcan::aerobtec::ESC_status>& msg)
+{
+	aerobtec_esc_status_cb(msg, 1);
+}
+static void (*aerobtec_esc_status_cb_arr[2])(const uavcan::ReceivedDataStructure<uavcan::aerobtec::ESC_status>& msg)
+        = { aerobtec_esc_status_cb0, aerobtec_esc_status_cb1};
+
+
+/*Listener for Speed*/
+static void aerobtec_speed_cb(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Speed>& msg, uint8_t mgr)
+{
+    AP_UAVCAN *ap_uavcan = AP_UAVCAN::get_uavcan(mgr);
+    if (ap_uavcan == nullptr) {
+        return;
+    }
+
+    ae_rx_speed = ap_uavcan->find_ae_speed_node();
+    if (ae_rx_speed == nullptr) {
+        return;
+    }
+
+    for(uint8_t i = 0; i < 8; i++)
+    {
+		ae_rx_speed->speed_value[i] = msg.speed[i];
+    }
+}
+
+static void aerobtec_speed_cb0(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Speed>& msg)
+{
+	aerobtec_speed_cb(msg, 0);
+}
+static void aerobtec_speed_cb1(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Speed>& msg)
+{
+	aerobtec_speed_cb(msg, 1);
+}
+static void (*aerobtec_speed_cb_arr[2])(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Speed>& msg)
+        = { aerobtec_speed_cb0, aerobtec_speed_cb1};
+
+
+//listener for Temp
+static void aerobtec_temp_cb(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Temp>& msg, uint8_t mgr)
+{
+    AP_UAVCAN *ap_uavcan = AP_UAVCAN::get_uavcan(mgr);
+    if (ap_uavcan == nullptr) {
+        return;
+    }
+
+    ae_rx_temp = ap_uavcan->find_ae_temp_node();
+    if (ae_rx_temp == nullptr) {
+        return;
+    }
+
+    for(uint8_t i = 0; i < 8; i++)
+    {
+		ae_rx_temp->temp_value[i] = msg.temp[i];
+    }
+}
+
+static void aerobtec_temp_cb0(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Temp>& msg)
+{
+	aerobtec_temp_cb(msg, 0);
+}
+static void aerobtec_temp_cb1(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Temp>& msg)
+{
+	aerobtec_temp_cb(msg, 1);
+}
+static void (*aerobtec_temp_cb_arr[2])(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Temp>& msg)
+        = { aerobtec_temp_cb0, aerobtec_temp_cb1};
+
+
+//listener for Vbus
+static void aerobtec_vbus_cb(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Vbus>& msg, uint8_t mgr)
+{
+    AP_UAVCAN *ap_uavcan = AP_UAVCAN::get_uavcan(mgr);
+    if (ap_uavcan == nullptr) {
+        return;
+    }
+
+    ae_rx_vbus = ap_uavcan->find_ae_vbus_node();
+    if (ae_rx_vbus == nullptr) {
+        return;
+    }
+
+    for(uint8_t i = 0; i < 8; i++)
+    {
+		ae_rx_vbus->vbus_value[i] =  ae_iq2float(msg.Vbus[i], 0, 7, 3);
+    }
+}
+
+static void aerobtec_vbus_cb0(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Vbus>& msg)
+{
+	aerobtec_vbus_cb(msg, 0);
+}
+static void aerobtec_vbus_cb1(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Vbus>& msg)
+{
+	aerobtec_vbus_cb(msg, 1);
+}
+static void (*aerobtec_vbus_cb_arr[2])(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Vbus>& msg)
+        = { aerobtec_vbus_cb0, aerobtec_vbus_cb1};
+
+
+//listener for V_s
+static void aerobtec_vs_cb(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Vs>& msg, uint8_t mgr)
+{
+    AP_UAVCAN *ap_uavcan = AP_UAVCAN::get_uavcan(mgr);
+    if (ap_uavcan == nullptr) {
+        return;
+    }
+
+    ae_rx_vs = ap_uavcan->find_ae_vs_node();
+    if (ae_rx_vs == nullptr) {
+        return;
+    }
+
+    for(uint8_t i = 0; i < 8; i++)
+    {
+		ae_rx_vs->vs_value[i] = ae_iq2float(msg.Vs[i], 0, 8, 3);
+    }
+}
+
+static void aerobtec_vs_cb0(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Vs>& msg)
+{
+	aerobtec_vs_cb(msg, 0);
+}
+static void aerobtec_vs_cb1(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Vs>& msg)
+{
+	aerobtec_vs_cb(msg, 1);
+}
+static void (*aerobtec_vs_cb_arr[2])(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Vs>& msg)
+        = { aerobtec_vs_cb0, aerobtec_vs_cb1};
+
+
+//listener for I_s
+static void aerobtec_is_cb(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Is>& msg, uint8_t mgr)
+{
+    AP_UAVCAN *ap_uavcan = AP_UAVCAN::get_uavcan(mgr);
+    if (ap_uavcan == nullptr) {
+        return;
+    }
+
+    ae_rx_is = ap_uavcan->find_ae_is_node();
+    if (ae_rx_is == nullptr) {
+        return;
+    }
+
+    for(uint8_t i = 0; i < 8; i++)
+    {
+		ae_rx_is->is_value[i] = ae_iq2float(msg.Is[i], 0, 9, 3);
+    }
+}
+
+static void aerobtec_is_cb0(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Is>& msg)
+{
+	aerobtec_is_cb(msg, 0);
+}
+static void aerobtec_is_cb1(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Is>& msg)
+{
+	aerobtec_is_cb(msg, 1);
+}
+static void (*aerobtec_is_cb_arr[2])(const uavcan::ReceivedDataStructure<uavcan::aerobtec::Is>& msg)
+        = { aerobtec_is_cb0, aerobtec_is_cb1};
+
+/***********************End Of AerobTec***********************/
+
+
 // publisher interfaces
 static uavcan::Publisher<uavcan::equipment::actuator::ArrayCommand>* act_out_array[MAX_NUMBER_OF_CAN_DRIVERS];
 static uavcan::Publisher<uavcan::equipment::esc::RawCommand>* esc_raw[MAX_NUMBER_OF_CAN_DRIVERS];
 static uavcan::Publisher<uavcan::equipment::indication::LightsCommand>* rgb_led[MAX_NUMBER_OF_CAN_DRIVERS];
+//Aerobtec
+static uavcan::Publisher<uavcan::aerobtec::AerobtecMsg>* ae_publisher[MAX_NUMBER_OF_CAN_DRIVERS];
 
 AP_UAVCAN::AP_UAVCAN() :
     _node_allocator(
@@ -459,7 +755,7 @@ bool AP_UAVCAN::try_init(void)
     node->setNodeID(self_node_id);
 
     char ndname[20];
-    snprintf(ndname, sizeof(ndname), "org.ardupilot:%u", _uavcan_i);
+    snprintf(ndname, sizeof(ndname), "Aerobtec_px4_v0.02");
 
     uavcan::NodeStatusProvider::NodeName name(ndname);
     node->setName(name);
@@ -537,6 +833,71 @@ bool AP_UAVCAN::try_init(void)
         return false;
     }
 
+
+    uavcan::Subscriber<uavcan::aerobtec::AerobtecMsg> *aerobtec_apm_msg;
+    aerobtec_apm_msg = new uavcan::Subscriber<uavcan::aerobtec::AerobtecMsg>(*node);
+    const int aerobtec_apm_start_res = aerobtec_apm_msg->start(aerobtec_data_cb_arr[_uavcan_i]);
+    if (aerobtec_apm_start_res < 0) {
+        debug_uavcan(1, "UAVCAN AerobTec subscriber start problem\n\r");
+        return false;
+    }
+
+    uavcan::Subscriber<uavcan::aerobtec::PWM> *aerobtec_pwm_msg;
+    aerobtec_pwm_msg = new uavcan::Subscriber<uavcan::aerobtec::PWM>(*node);
+    const int aerobtec_pwm_start_res = aerobtec_pwm_msg->start(aerobtec_pwm_cb_arr[_uavcan_i]);
+    if (aerobtec_pwm_start_res < 0) {
+        debug_uavcan(1, "UAVCAN AerobTec PWM subscriber start problem\n\r");
+        return false;
+    }
+
+    uavcan::Subscriber<uavcan::aerobtec::ESC_status> *aerobtec_esc_status_msg;
+    aerobtec_esc_status_msg = new uavcan::Subscriber<uavcan::aerobtec::ESC_status>(*node);
+    const int aerobtec_esc_status_start_res = aerobtec_esc_status_msg->start(aerobtec_esc_status_cb_arr[_uavcan_i]);
+    if (aerobtec_esc_status_start_res < 0) {
+        debug_uavcan(1, "UAVCAN AerobTec Esc status subscriber start problem\n\r");
+        return false;
+    }
+
+    uavcan::Subscriber<uavcan::aerobtec::Speed> *aerobtec_speed_msg;
+    aerobtec_speed_msg = new uavcan::Subscriber<uavcan::aerobtec::Speed>(*node);
+    const int aerobtec_speed_start_res = aerobtec_speed_msg->start(aerobtec_speed_cb_arr[_uavcan_i]);
+    if (aerobtec_speed_start_res < 0) {
+        debug_uavcan(1, "UAVCAN AerobTec speed subscriber start problem\n\r");
+        return false;
+    }
+
+    uavcan::Subscriber<uavcan::aerobtec::Temp> *aerobtec_temp_msg;
+    aerobtec_temp_msg = new uavcan::Subscriber<uavcan::aerobtec::Temp>(*node);
+    const int aerobtec_temp_start_res = aerobtec_temp_msg->start(aerobtec_temp_cb_arr[_uavcan_i]);
+    if (aerobtec_temp_start_res < 0) {
+        debug_uavcan(1, "UAVCAN AerobTec temp subscriber start problem\n\r");
+        return false;
+    }
+
+    uavcan::Subscriber<uavcan::aerobtec::Vbus> *aerobtec_vbus_msg;
+    aerobtec_vbus_msg = new uavcan::Subscriber<uavcan::aerobtec::Vbus>(*node);
+    const int aerobtec_vbus_start_res = aerobtec_vbus_msg->start(aerobtec_vbus_cb_arr[_uavcan_i]);
+    if (aerobtec_vbus_start_res < 0) {
+        debug_uavcan(1, "UAVCAN AerobTec vbus subscriber start problem\n\r");
+        return false;
+    }
+
+    uavcan::Subscriber<uavcan::aerobtec::Vs> *aerobtec_vs_msg;
+    aerobtec_vs_msg = new uavcan::Subscriber<uavcan::aerobtec::Vs>(*node);
+    const int aerobtec_vs_start_res = aerobtec_vs_msg->start(aerobtec_vs_cb_arr[_uavcan_i]);
+    if (aerobtec_vs_start_res < 0) {
+        debug_uavcan(1, "UAVCAN AerobTec is subscriber start problem\n\r");
+        return false;
+    }
+
+    uavcan::Subscriber<uavcan::aerobtec::Is> *aerobtec_is_msg;
+    aerobtec_is_msg = new uavcan::Subscriber<uavcan::aerobtec::Is>(*node);
+    const int aerobtec_is_start_res = aerobtec_is_msg->start(aerobtec_is_cb_arr[_uavcan_i]);
+    if (aerobtec_is_start_res < 0) {
+        debug_uavcan(1, "UAVCAN AerobTec is subscriber start problem\n\r");
+        return false;
+    }
+
     act_out_array[_uavcan_i] = new uavcan::Publisher<uavcan::equipment::actuator::ArrayCommand>(*node);
     act_out_array[_uavcan_i]->setTxTimeout(uavcan::MonotonicDuration::fromMSec(20));
     act_out_array[_uavcan_i]->setPriority(uavcan::TransferPriority::OneLowerThanHighest);
@@ -548,6 +909,10 @@ bool AP_UAVCAN::try_init(void)
     rgb_led[_uavcan_i] = new uavcan::Publisher<uavcan::equipment::indication::LightsCommand>(*node);
     rgb_led[_uavcan_i]->setTxTimeout(uavcan::MonotonicDuration::fromMSec(20));
     rgb_led[_uavcan_i]->setPriority(uavcan::TransferPriority::OneHigherThanLowest);
+
+    ae_publisher[_uavcan_i] = new uavcan::Publisher<uavcan::aerobtec::AerobtecMsg>(*node);
+    ae_publisher[_uavcan_i]->setTxTimeout(uavcan::MonotonicDuration::fromMSec(20));
+    ae_publisher[_uavcan_i]->setPriority(uavcan::TransferPriority::OneHigherThanLowest);
 
     _led_conf.devices_count = 0;
 
@@ -628,7 +993,9 @@ void AP_UAVCAN::SRV_send_servos(void)
 
 void AP_UAVCAN::SRV_send_esc(void)
 {
-    static const int cmd_max = uavcan::equipment::esc::RawCommand::FieldTypes::cmd::RawValueType::max();
+    //static const int cmd_max = uavcan::equipment::esc::RawCommand::FieldTypes::cmd::RawValueType::max();
+    static const int cmd_max = 2200;
+
     uavcan::equipment::esc::RawCommand esc_msg;
 
     uint8_t active_esc_num = 0, max_esc_num = 0;
@@ -655,7 +1022,7 @@ void AP_UAVCAN::SRV_send_esc(void)
                 // TODO: ESC negative scaling for reverse thrust and reverse rotation
                 float scaled = cmd_max * (hal.rcout->scale_esc_to_unity(_SRV_conf[i].pulse) + 1.0) / 2.0;
 
-                scaled = constrain_float(scaled, 0, cmd_max);
+                scaled = constrain_float(scaled, 900, cmd_max);
 
                 esc_msg.cmd.push_back(static_cast<int>(scaled));
             } else {
@@ -668,6 +1035,24 @@ void AP_UAVCAN::SRV_send_esc(void)
 
         esc_raw[_uavcan_i]->broadcast(esc_msg);
     }
+}
+
+void AP_UAVCAN::AerobTec_Tx(void)
+{
+	uavcan::aerobtec::AerobtecMsg ae_msg;
+
+	ae_msg.status = 0x00FF;
+	ae_msg.temp = 0xFF00;
+
+	ae_msg.PWM = ae_rx_msg->PWM;
+	ae_msg.Vbus = ae_rx_msg->Vbus;
+	ae_msg.Is = ae_rx_msg->Is;
+	ae_msg.Vs = ae_rx_msg->Vs;
+	ae_msg.speed = ae_rx_msg->speed;
+	ae_msg.status = ae_rx_msg->status;
+	ae_msg.temp = ae_rx_msg->temp;
+
+	ae_publisher[_uavcan_i]->broadcast(ae_msg);
 }
 
 void AP_UAVCAN::do_cyclic(void)
@@ -711,6 +1096,19 @@ void AP_UAVCAN::do_cyclic(void)
         for (uint8_t i = 0; i < UAVCAN_SRV_NUMBER; i++) {
             _SRV_conf[i].esc_pending = false;
         }
+    }
+
+    if(1)
+    {
+    	uint32_t actual_time = AP_HAL::micros();
+    	static uint32_t last_send_time = 0;
+
+    	if((actual_time - last_send_time) > 3000000)
+    	{
+    		last_send_time = actual_time;
+
+    		AerobTec_Tx();
+    	}
     }
 
     if (led_out_sem_take()) {
@@ -1375,6 +1773,47 @@ void AP_UAVCAN::update_bi_state(uint8_t id)
             _bi_BM_listeners[j]->handle_bi_msg(_bi_id_state[i].voltage, _bi_id_state[i].current, _bi_id_state[i].temperature);
         }
     }
+}
+
+
+AP_UAVCAN::Aerobtec_message *AP_UAVCAN::find_ae_node(void)
+{
+	return &_ae_state;
+}
+
+AP_UAVCAN::AE_pwm *AP_UAVCAN::find_ae_pwm_node(void)
+{
+	return &_ae_state_pwm;
+}
+
+AP_UAVCAN::AE_esc_status *AP_UAVCAN::find_ae_esc_status_node(void)
+{
+	return &_ae_state_esc_status;
+}
+
+AP_UAVCAN::AE_speed *AP_UAVCAN::find_ae_speed_node(void)
+{
+	return &_ae_state_speed;
+}
+
+AP_UAVCAN::AE_temp *AP_UAVCAN::find_ae_temp_node(void)
+{
+	return &_ae_state_temp;
+}
+
+AP_UAVCAN::AE_V_bus *AP_UAVCAN::find_ae_vbus_node(void)
+{
+	return &_ae_state_vbus;
+}
+
+AP_UAVCAN::AE_V_s *AP_UAVCAN::find_ae_vs_node(void)
+{
+	return &_ae_state_vs;
+}
+
+AP_UAVCAN::AE_I_s *AP_UAVCAN::find_ae_is_node(void)
+{
+	return &_ae_state_is;
 }
 
 bool AP_UAVCAN::led_write(uint8_t led_index, uint8_t red, uint8_t green, uint8_t blue) {

@@ -229,6 +229,14 @@ bool GCS_MAVLINK::send_battery_status() const
     return true;
 }
 
+/*AerobTec*/
+/*
+void send_ae_esc_telemetry_data() const
+{
+
+}
+*/
+
 void GCS_MAVLINK::send_distance_sensor(const AP_RangeFinder_Backend *sensor, const uint8_t instance) const
 {
     if (!sensor->has_data()) {

@@ -37,6 +37,7 @@
 #define AP_UAVCAN_MAX_MAG_NODES 4
 #define AP_UAVCAN_MAX_BARO_NODES 4
 #define AP_UAVCAN_MAX_BI_NUMBER 4
+#define AP_UAVCAN_MAX_AEROBTEC_NUMBER 4
 
 #define AP_UAVCAN_SW_VERS_MAJOR 1
 #define AP_UAVCAN_SW_VERS_MINOR 0
@@ -118,6 +119,77 @@ public:
     uint8_t find_smallest_free_bi_id();
     void update_bi_state(uint8_t id);
 
+    struct Aerobtec_message
+    {
+    	uint16_t status;
+    	uint16_t speed;
+    	uint16_t Vs;
+    	uint16_t Is;
+    	float Vbus;
+    	uint16_t PWM;
+    	uint16_t temp;
+    };
+
+    struct AE_ESC_DATA
+    {
+    	uint16_t status[8];
+    	uint16_t speed[8];
+    	uint16_t Vs[8];
+    	uint16_t Is[8];
+    	float Vbus[8];
+    	uint16_t PWM[8];
+    	uint16_t temp[8];
+    };
+
+    struct AE_pwm
+    {
+    	uint16_t pwm_value[8];
+    };
+
+    struct AE_esc_status
+    {
+    	uint16_t status_value[8];
+    };
+
+    struct AE_speed
+    {
+    	uint16_t speed_value[8];
+    };
+
+    struct AE_V_bus
+    {
+    	uint16_t vbus_value[8];
+    };
+
+    struct AE_I_s
+    {
+    	uint16_t is_value[8];
+    };
+
+    struct AE_V_s
+    {
+    	uint16_t vs_value[8];
+    };
+
+    struct AE_temp
+    {
+    	uint16_t temp_value[8];
+    };
+
+
+    Aerobtec_message *find_ae_node(void);
+    AE_pwm *find_ae_pwm_node(void);
+    AE_esc_status *find_ae_esc_status_node(void);
+    AE_speed *find_ae_speed_node(void);
+    AE_temp *find_ae_temp_node(void);
+    AE_V_bus *find_ae_vbus_node(void);
+    AE_I_s *find_ae_is_node(void);
+    AE_V_s *find_ae_vs_node(void);
+    AE_ESC_DATA *get_ae_esc_data(void);
+
+    void AerobTec_Tx(void);
+    float ae_iq2float(uint32_t number, uint8_t sign, uint8_t Ivalue, uint8_t Qvalue);
+
     // synchronization for RC output
     void SRV_sem_take();
     void SRV_sem_give();
@@ -167,6 +239,16 @@ private:
     BatteryInfo_Info _bi_id_state[AP_UAVCAN_MAX_BI_NUMBER];
     uint16_t _bi_BM_listener_to_id[AP_UAVCAN_MAX_LISTENERS];
     AP_BattMonitor_Backend* _bi_BM_listeners[AP_UAVCAN_MAX_LISTENERS];
+
+    // ------------------------- AerobTec
+    struct Aerobtec_message _ae_state;
+    struct AE_pwm _ae_state_pwm;
+    struct AE_esc_status _ae_state_esc_status;
+    struct AE_speed _ae_state_speed;
+    struct AE_V_bus _ae_state_vbus;
+    struct AE_I_s _ae_state_is;
+    struct AE_V_s _ae_state_vs;
+    struct AE_temp _ae_state_temp;
 
     struct {
         uint16_t pulse;

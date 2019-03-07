@@ -197,6 +197,9 @@ public:
     static void send_collision_all(const AP_Avoidance::Obstacle &threat, MAV_COLLISION_ACTION behaviour);
     void send_accelcal_vehicle_position(uint32_t position);
 
+    /*Aerobtec*/
+    void send_ae_esc_telemetry_data() const;
+
     // return a bitmap of active channels. Used by libraries to loop
     // over active channels to send to all active channels    
     static uint8_t active_channel_mask(void) { return mavlink_active; }
